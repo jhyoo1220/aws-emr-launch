@@ -1,6 +1,7 @@
 import boto3
 from botocore.exceptions import WaiterError
 from datetime import datetime
+import time
 from typing import List
 import sys
 
@@ -27,6 +28,9 @@ EC2_KEY_NAME = ""
 
 # To debug with logs, we should provide LogUri
 LOG_URI = ""
+
+
+MAX_WAIT_FOR_CREATING_IN_MINUTES = 20
 
 
 class Emr:
@@ -279,19 +283,24 @@ class Emr:
 
         cluster_id = response['JobFlowId']
         print(f"EMR cluster is being created with {cluster_id}...")
-        waiter = emr_client.get_waiter("cluster_running")
 
-        try:
-            waiter.wait(ClusterId=cluster_id)
+        for _ in range(MAX_WAIT_FOR_CREATING_IN_MINUTES):
+            emr_client = boto3.client("emr", region_name=region)
+            response = emr_client.describe_cluster(ClusterId=cluster_id)
 
-        except WaiterError:
-            status = emr_client.describe_cluster(ClusterId=cluster_id)['Cluster']['Status']
-            state = status['State']
-            state_change_reason = status['StateChangeReason']
+            status = response['Cluster']['Status']['State']
+            print(f"EMR cluster is {status}")
 
-            raise Exception(f"Something is wrong during creating cluster: {state} with {state_change_reason}")
+            if status in ['WAITING']:
+                print(f"{cluster_id} is successfully created.")
+                return
 
-        print(f"{cluster_id} is successfully created.")
+            elif status in ['TERMINATING', 'TERMINATED', 'TERMINATED_WITH_ERRORS']:
+                status_change_reason = response['Cluster']['Status']['StateChangeReason']
+                raise Exception(f"EMR cluster is {status} due to {status_change_reason}")
+
+            time.sleep(60)
+        raise Exception(f"Have been waited for {MAX_WAIT_FOR_CREATING_IN_MINUTES} minutes and stopped waiting.")
 
 if __name__ == "__main__":
     region = sys.argv[1]
